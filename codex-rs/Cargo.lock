@@ -4045,6 +4045,17 @@ dependencies = [
 [[package]]
 name = "codex-supervisor"
 version = "0.144.1"
+dependencies = [
+ "chrono",
+ "codex-utils-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.9.11+spec-1.1.0",
+ "uuid",
+]
 
 [[package]]
 name = "codex-terminal-detection"

@@ -1,0 +1,68 @@
+# supervisor 模型登记表（P1-2 schema / P1-6 内容；随 repo 版本化）
+# 属性依据 = Phase 0 实测（results/phase0-results.md）；provider id 指向 config.toml。
+# 「量化损伤」（换档可消）与「家族短板」（量化无关）分列——需求 #10。
+
+schema_version = 1
+
+[models.qwen36-nvfp4]
+served_name = "nvidia/Qwen3.6-35B-A3B-NVFP4"
+thinking = "on"            # serve 默认开：简单任务耗时 2×（26s→54s 实测）
+latency = "medium"         # T1 39s / T2 54s
+write_tasks = "reliable"   # T2/T3-a/T4 全绿；T3-a 接替 bf16 一发命中
+family_traits = ["深 bug 后果推演偶带臆测（T1）"]
+endpoint_probe = "http://192.168.3.1:8000/v1/models"
+notes = "spark1（DGX Spark）vLLM 0.26.1rc1.dev30；中坚主力，T3-a 换将救场者"
+
+[models.qwen36-nvfp4.provider]
+id = "rdos-vllm"
+
+[models.qwen36-nvfp4.engine]
+kind = "vllm"
+version = "0.26.1rc1.dev30"
+
+[models.qwen36-nvfp4.quantization]
+format = "NVFP4"
+bits = 4
+
+[models.gemma4-spark]
+served_name = "google/gemma-4-26B-A4B-it"
+thinking = "off"
+latency = "fast"           # T1 47s / T2 39s
+write_tasks = "reliable"   # 官方 bf16：T2 干净单点修复；同引擎对照下 AWQ 的假完成/盲改消失
+family_traits = [
+  "可达性分析翻车：声称不含 - 的输入也失败（AWQ 与 bf16 同现，26B-A4B 家族特质）",
+  "假完成风险：工具调用随机掉进文本通道（bf16 T3-a ×2；vLLM 0.21 工具通道嫌疑并存）",
+]
+endpoint_probe = "http://192.168.3.2:8000/v1/models"
+notes = "spark2 vLLM 0.21.1rc1（偏旧）；gemma 系首个可写+进 60s 窗口的 serve；假完成时按弃线换将处置"
+
+[models.gemma4-spark.provider]
+id = "rdos-spark2"
+
+[models.gemma4-spark.engine]
+kind = "vllm"
+version = "0.21.1rc1"
+
+[models.gemma4-spark.quantization]
+format = "bf16"
+
+[models.deepseek-flash]
+served_name = "deepseek-v4-flash"
+thinking = "unknown"
+latency = "slow"           # DSpark temp=0 长生成明显变慢（完整版 T1 曾超 60s 窗口）
+write_tasks = "reliable"   # T2 46s 达标；T3-b todo!() 实现 7 绿
+family_traits = []
+endpoint_probe = "http://127.0.0.1:18300/v1/models"   # 经 temp0 代理；代理未起=不可达
+notes = "studio（ds4.c 引擎，ctx 100k）。DSpark 要求显式 temperature=0：现经 scripts/dspark_proxy.py（127.0.0.1:18300）注入，P1-7 内化为中间件后直连。三家最强：T1 限长版唯一双杀"
+
+[models.deepseek-flash.provider]
+id = "rdos-dsflash"
+
+[models.deepseek-flash.engine]
+kind = "ds4.c"
+
+[models.deepseek-flash.quantization]
+format = "unknown"
+
+[models.deepseek-flash.inject]
+temperature = 0.0

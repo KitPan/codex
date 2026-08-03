@@ -82,6 +82,10 @@
       熔断、南向重试+preflight、diff-first 落盘开关。
 - [ ] **P1-6 模型登记与分派**：三台助理入登记表（量化/引擎/延迟/推理档），
       spawn_task 按登记表路由；escalation 规范注入任务模板。
+      （进展 2026-08-04：登记表首版已入库 `codex-home/supervisor.models.toml`
+      （三台全属性，含 deepseek inject temp=0 钩子），spawn_task 按表路由已实证
+      （实弹冒烟经 qwen 条目）。余项：escalation 规范注入任务模板、reasoning 档
+      作为分派参数下发、metadata fallback 警告消除。）
 - [ ] **P1-7 中间层收编**：dspark_proxy 逻辑内化为 provider 中间件（参数注入 +
       请求体审计日志）。
 - [ ] **P1-8 回归验收**：用 Phase 0 testbed 跑 T1–T6 全矩阵回归（基线预期见

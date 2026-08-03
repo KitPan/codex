@@ -1,0 +1,3 @@
+# profile: deepseek-flash —— GPU box DeepSeek V4 Flash（DSpark，temperature=0 经代理强制）
+model = "deepseek-v4-flash"
+model_provider = "rdos-dsflash"

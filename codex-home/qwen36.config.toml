@@ -1,0 +1,6 @@
+# profile: qwen36 —— DGX Spark 上的 Qwen3.6-35B-A3B（NVIDIA 官方 NVFP4，2026-08-03 起）
+model = "nvidia/Qwen3.6-35B-A3B-NVFP4"
+model_provider = "rdos-vllm"
+
+[tui.model_availability_nux]
+"gpt-5.6-sol" = 1

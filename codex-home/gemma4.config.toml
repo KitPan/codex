@@ -1,0 +1,5 @@
+# profile: gemma4 —— 本机跑腿/冒烟模型
+# 2026-08-03 实测：4bit 变体写任务不可用（apply_patch 死循环 328 次，hunk 行号凭空
+# 生成）；8bit 一发命中。缺省用 8bit；4bit 仅限只读任务。
+model = "gemma-4-31B-it-MLX-8bit"
+model_provider = "rdos-local"

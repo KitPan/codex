@@ -1,0 +1,4 @@
+# profile: qwen36-deep —— 旧 serve 的 deep 别名已随换权重下线（2026-08-03）；
+# 暂指向同一 NVFP4 模型占位，深推理档待服务端恢复别名或改用 reasoning 参数区分。
+model = "nvidia/Qwen3.6-35B-A3B-NVFP4"
+model_provider = "rdos-vllm"

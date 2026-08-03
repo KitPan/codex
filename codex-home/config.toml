@@ -1,0 +1,52 @@
+# RDOSCli 隔离 CODEX_HOME —— 两种等价用法（~/.rdos 是指向本目录的软链）：
+#   export CODEX_HOME=$HOME/.rdos
+#   export CODEX_HOME=/Users/kit/Workspace/RDOSCli/codex-home
+# 注意：CODEX_HOME 显式设置时 codex 要求目录已存在（会 canonicalize），
+# 且不做 ~ 展开——JSON 配置（如 claude_desktop_config.json）里必须写绝对路径。
+#
+# profile 机制（codex 0.144 实测）：`[profiles.*]` 表已废弃，`--profile <p>` 读取
+# 本目录下的 `<p>.config.toml` 叠加于本文件之上。现有 profile 文件：
+#   qwen36.config.toml / qwen36-deep.config.toml / gemma4.config.toml
+
+# 缺省走本机 gemma（跑腿/冒烟模型，不依赖 GPU box 在线）；难任务用 profile 显式指派。
+# 2026-08-03：缺省从 4bit 切 8bit——4bit 写任务死循环（见 results），8bit 实测可靠。
+model = "gemma-4-31B-it-MLX-8bit"
+model_provider = "rdos-local"
+personality = "pragmatic"
+
+# ---------- providers（自定义 id 不能用保留名 openai/ollama/lmstudio，统一 rdos- 前缀）----------
+
+[model_providers.rdos-vllm]
+name = "RDOS vLLM (DGX Spark, spark1.local)"
+base_url = "http://spark1.local:8000/v1"
+wire_api = "responses"   # codex 0.144 起 chat 已移除（openai/codex#7782）；vLLM 实测支持 /v1/responses
+# 2026-08-03 换权重：NVIDIA 官方 NVFP4 版 nvidia/Qwen3.6-35B-A3B-NVFP4（单一 served
+# name，thinking 默认开，ctx 262144），vLLM 0.26.1rc1.dev30。spark1.local=192.168.3.1
+# （mDNS 全链路可解析已验证）。旧 serve（:8964，Heretic 权重 + fast/deep 别名）已下线。
+
+[model_providers.rdos-local]
+name = "RDOS omlx (local MLX, :9999)"
+base_url = "http://127.0.0.1:9999/v1"
+wire_api = "responses"   # omlx 实测原生支持 /v1/responses
+
+# 实测 2026-08-02：omlx 多模型服务；含 gemma-4-31B-it 4bit/8bit、Qwen3.6-35B-A3B 等。
+
+[model_providers.rdos-spark2]
+name = "RDOS vLLM (DGX Spark 2, spark2.local)"
+base_url = "http://spark2.local:8000/v1"
+wire_api = "responses"
+# 2026-08-03：spark2.local=192.168.3.2，serve cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit
+# （社区 AWQ 4bit，MoE 26B/激活 4B，ctx 262144），vLLM 0.21.1rc1.dev141（偏旧）。
+
+[model_providers.rdos-dsflash]
+name = "RDOS DeepSeek V4 Flash (DSpark, via temp0 proxy)"
+base_url = "http://127.0.0.1:18300/v1"
+wire_api = "responses"
+# 2026-08-03 部署：真实上游 http://studio.local:8000/v1（=192.168.3.3，引擎标识 ds4.c，serve
+# deepseek-v4-flash / deepseek-v4-pro，ctx 100k）。Kit 开了 DSpark：请求必须显式
+# temperature=0（默认置信度阈值 0.7）。codex 不保证带该字段，故经本机注入代理
+# 中转：先运行 `python3 scripts/dspark_proxy.py`（监听 127.0.0.1:18300）。
+
+# codex 0.144 运行时会把项目信任状态持久化写进本文件（已知副作用，见 results 接口现实）：
+[projects."/Users/kit/Workspace/RDOSCli"]
+trust_level = "trusted"

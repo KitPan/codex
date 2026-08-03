@@ -1,0 +1,8 @@
+# codex 运行时数据（*.toml 配置入库，会话/日志/凭证不入库）
+codex-home/*
+!codex-home/*.toml
+
+# Rust
+target/
+
+.DS_Store

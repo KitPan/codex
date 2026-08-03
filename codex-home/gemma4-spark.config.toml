@@ -1,0 +1,5 @@
+# profile: gemma4-spark —— spark2 上的 gemma-4-26B-A4B
+# 2026-08-03 深夜换 Google 官方权重 google/gemma-4-26B-A4B-it（此前为 cyankiwi AWQ-4bit，
+# 假完成+盲改已定性只读；官方版正在复测写任务）。本机 omlx 8bit 版仍是 gemma4 profile。
+model = "google/gemma-4-26B-A4B-it"
+model_provider = "rdos-spark2"

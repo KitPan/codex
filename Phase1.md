@@ -44,8 +44,13 @@
 
 ## 3. 任务清单（按序执行，完成勾一项）
 
-- [ ] **P1-1 fork 与工作区**：fork openai/codex、钉 tag、workspace 添加
+- [x] **P1-1 fork 与工作区**：fork openai/codex、钉 tag、workspace 添加
       `codex-supervisor` crate 骨架，`cargo build` 全绿；记录 tag 与 rebase 策略。
+      （✅ 2026-08-03：`codex/` 嵌套仓库钉 `rust-v0.144.1`（与实测二进制同版），
+      分支 `rdos-main` 三笔定制——`rdos-cli` 并列 bin（上游 24 处按名解析测试零伤）、
+      默认 home `~/.rdos`（叶子 crate + 单测）、supervisor 骨架（9 模块 stub 锚定
+      需求编号）。全量 build 绿、home-dir 4/4、clippy 干净；三个二进制冒烟通过。
+      档案与 rebase 手册见 [FORK.md](FORK.md)。）
 - [ ] **P1-2 数据模型**：Task / Session / ModelRegistry 三张表（含持久化），
       会话状态按需求 #3 全字段建模。
 - [ ] **P1-3 执行器**：spawn `codex exec --json`、JSONL 事件解析、任务生命周期

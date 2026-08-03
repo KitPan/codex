@@ -2,6 +2,9 @@
 codex-home/*
 !codex-home/*.toml
 
+# codex fork（嵌套 git 仓库，独立版本控制；档案见 FORK.md）
+/codex/
+
 # Rust
 target/
 

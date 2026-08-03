@@ -4,7 +4,9 @@
 （Claude Desktop / Claude Code）通过 MCP 监督执行——分配任务、监控进度、审批、打断。
 
 - **当前阶段：Phase 1**（bridge v1 冲刺）。开工图纸 [Phase1.md](Phase1.md)——新
-  session 先读它，按 §3 任务清单从未勾选项继续；Phase 0 全部实测与 17 条需求清单
+  session 先读它，按 §3 任务清单从未勾选项继续。codex fork 位于 `codex/`
+  （嵌套独立 git 仓库，钉 `rust-v0.144.1`，分支 `rdos-main`，定制集中在
+  `codex-rs/supervisor/` crate）——结构事实与 rebase 手册见 [FORK.md](FORK.md)；Phase 0 全部实测与 17 条需求清单
   见 [Phase0.md](Phase0.md) + [results/phase0-results.md](results/phase0-results.md)
   （2026-08-03 通关，commit b768816）。
 - 本地模型（2026-08-03 实测）：Qwen3.6-35B-A3B **NVFP4**（NVIDIA 官方权重，vLLM @

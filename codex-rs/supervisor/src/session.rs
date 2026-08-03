@@ -57,6 +57,17 @@ pub enum SandboxMode {
     DangerFullAccess,
 }
 
+impl SandboxMode {
+    /// codex CLI `--sandbox` 的传值形态（与 serde 形态一致）。
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            SandboxMode::ReadOnly => "read-only",
+            SandboxMode::WorkspaceWrite => "workspace-write",
+            SandboxMode::DangerFullAccess => "danger-full-access",
+        }
+    }
+}
+
 /// 审批策略。v1 缺省 `Never` + 沙箱兜底（#13 审批路由挂账 Phase 2——
 /// 实测 Claude Code 客户端不呈现 elicitation，审批请求会挂死 60s 窗口）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

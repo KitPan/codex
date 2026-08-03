@@ -52,6 +52,11 @@ impl SupervisorHome {
         self.state_root().join("sessions")
     }
 
+    /// 任务 worktree 停车场（Phase0 §10：多实例并写同一 checkout 必丢工作）。
+    pub fn worktrees_dir(&self) -> PathBuf {
+        self.state_root().join("worktrees")
+    }
+
     /// 模型登记表：放 CODEX_HOME 顶层（`*.toml` 白名单使其随 repo 版本化）。
     pub fn models_path(&self) -> PathBuf {
         self.codex_home.join("supervisor.models.toml")
@@ -65,6 +70,7 @@ impl SupervisorHome {
     pub fn ensure_layout(&self) -> io::Result<()> {
         std::fs::create_dir_all(self.tasks_dir())?;
         std::fs::create_dir_all(self.sessions_dir())?;
+        std::fs::create_dir_all(self.worktrees_dir())?;
         Ok(())
     }
 
@@ -72,7 +78,14 @@ impl SupervisorHome {
     ///
     /// #4 的第一道闸：attach/steering 必须经单一 bridge 进程路由，双 bridge
     /// 并存等于回到控制隧道实验的「文件级双写」状态。
+    ///
+    /// 带有界重试（与 message-history 的 try_lock 重试同惯例）：锁描述符在
+    /// 进程/子进程收尾路径上可能有短暂残留窗口（macOS flock 实测偶发），
+    /// 500ms 内的 WouldBlock 视为瞬态；重试耗尽仍被占 = 真有另一个 bridge。
     pub fn acquire_singleton_lock(&self) -> Result<SupervisorLock, LockError> {
+        const RETRIES: u32 = 10;
+        const RETRY_SLEEP: std::time::Duration = std::time::Duration::from_millis(50);
+
         self.ensure_layout().map_err(LockError::Io)?;
         let path = self.lock_path();
         let mut file = OpenOptions::new()
@@ -81,19 +94,27 @@ impl SupervisorHome {
             .write(true)
             .open(&path)
             .map_err(LockError::Io)?;
-        match file.try_lock() {
-            Ok(()) => {
-                // 诊断信息尽力而为：拿到锁后写入 pid，失败不影响锁本身。
-                let pid = std::process::id();
-                let _ = file.set_len(0);
-                let _ = file.seek(SeekFrom::Start(0));
-                let _ = writeln!(file, "pid={pid}");
-                let _ = file.flush();
-                Ok(SupervisorLock { _file: file, path })
+        for attempt in 0..=RETRIES {
+            match file.try_lock() {
+                Ok(()) => {
+                    // 诊断信息尽力而为：拿到锁后写入 pid，失败不影响锁本身。
+                    let pid = std::process::id();
+                    let _ = file.set_len(0);
+                    let _ = file.seek(SeekFrom::Start(0));
+                    let _ = writeln!(file, "pid={pid}");
+                    let _ = file.flush();
+                    return Ok(SupervisorLock { _file: file, path });
+                }
+                Err(std::fs::TryLockError::WouldBlock) if attempt < RETRIES => {
+                    std::thread::sleep(RETRY_SLEEP);
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(LockError::AlreadyRunning { path });
+                }
+                Err(std::fs::TryLockError::Error(err)) => return Err(LockError::Io(err)),
             }
-            Err(std::fs::TryLockError::WouldBlock) => Err(LockError::AlreadyRunning { path }),
-            Err(std::fs::TryLockError::Error(err)) => Err(LockError::Io(err)),
         }
+        unreachable!("loop returns on every arm")
     }
 }
 
@@ -228,7 +249,15 @@ mod tests {
         );
         drop(first);
         let third = sup.acquire_singleton_lock();
-        assert!(third.is_ok(), "lock must be reacquirable after release");
+        if let Err(err) = &third {
+            let lock_path = sup.state_root().join("supervisor.lock");
+            let lsof = std::process::Command::new("lsof")
+                .arg(&lock_path)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            panic!("lock must be reacquirable after release, got: {err:?}\nlsof:\n{lsof}");
+        }
     }
 
     #[test]

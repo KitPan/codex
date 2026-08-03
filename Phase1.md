@@ -51,8 +51,14 @@
       默认 home `~/.rdos`（叶子 crate + 单测）、supervisor 骨架（9 模块 stub 锚定
       需求编号）。全量 build 绿、home-dir 4/4、clippy 干净；三个二进制冒烟通过。
       档案与 rebase 手册见 [FORK.md](FORK.md)。）
-- [ ] **P1-2 数据模型**：Task / Session / ModelRegistry 三张表（含持久化），
+- [x] **P1-2 数据模型**：Task / Session / ModelRegistry 三张表（含持久化），
       会话状态按需求 #3 全字段建模。
+      （✅ 2026-08-03：fork commit `a4c6eb16ac`。registry=任务状态机（迁移校验）、
+      session=会话全字段（历史持**指针**不复制——rollout 是唯一真相源；模型亲和含
+      reasoning 档；claim/release 执行租约）、models=登记表 TOML（量化格式+档位、
+      损伤/家族分列、inject 参数钩子）、paths=布局+原子写+损坏容忍加载+flock 单例锁。
+      运行态 `supervisor/` gitignore 排除，登记表 `supervisor.models.toml` 顶层随
+      repo 版本化。13 单测全绿、clippy 过 deny 墙。）
 - [ ] **P1-3 执行器**：spawn `codex exec --json`、JSONL 事件解析、任务生命周期
       状态机（含 interrupt 杀进程 + worktree 回收）。
 - [ ] **P1-4 MCP 北向五件套**：spawn_task（含 worktree 分配）/ status / tail（摘要，

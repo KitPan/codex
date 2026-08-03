@@ -9,6 +9,12 @@ build = "build.rs"
 name = "codex"
 path = "src/main.rs"
 
+# rdos fork: product binary name; same entrypoint, built alongside `codex`
+# so upstream tests that resolve the `codex` bin keep working.
+[[bin]]
+name = "rdos-cli"
+path = "src/main.rs"
+
 [lib]
 name = "codex_cli"
 path = "src/lib.rs"

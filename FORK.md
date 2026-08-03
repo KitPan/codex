@@ -29,6 +29,11 @@ profile 独立文件、Responses-only、config.toml 运行时改写等全部 Pha
 原则（Phase0 §0 既定）：**薄 fork——定制 = 新增 crate，不散改内核**。上游文件
 触碰面永远保持个位数行，每笔定制独立 commit，rebase 冲突可逐笔裁决。
 
+上表只登记**触碰上游文件**的 commit；supervisor crate 内部的日常开发
+（P1-2 数据模型、P1-3 执行器等）不逐笔入表，看 `git log -- codex-rs/supervisor`。
+supervisor 对内核的依赖走 crate 边界（如 `codex-exec` 的 `ThreadEvent` 类型），
+rebase 后协议漂移由编译器报警。
+
 已知偏差备忘：
 
 - fork 内 `codex` bin 的默认 home 也变成 `~/.rdos`——对 Kit 的真 `~/.codex` 是保护

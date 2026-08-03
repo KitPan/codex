@@ -59,8 +59,16 @@
       损伤/家族分列、inject 参数钩子）、paths=布局+原子写+损坏容忍加载+flock 单例锁。
       运行态 `supervisor/` gitignore 排除，登记表 `supervisor.models.toml` 顶层随
       repo 版本化。13 单测全绿、clippy 过 deny 墙。）
-- [ ] **P1-3 执行器**：spawn `codex exec --json`、JSONL 事件解析、任务生命周期
+- [x] **P1-3 执行器**：spawn `codex exec --json`、JSONL 事件解析、任务生命周期
       状态机（含 interrupt 杀进程 + worktree 回收）。
+      （✅ 2026-08-03：fork commit `d7dd19dde2`。JSONL 以 codex-exec 自家
+      `ThreadEvent` 类型编译期解析（协议漂移=编译错误）；原始流逐行落盘、北向
+      只摘要；三路裁决 自然退出/interrupt/硬超时，**杀整个进程组**（只杀 codex
+      本体会留孤儿工具进程烧机器+占管道，实测 30s EOF 挂等）；worktree
+      allocate/reclaim 带任务分支 `rdos/task/<id>`（KeepBranch 承接 #8 审查）；
+      单例锁加有界重试（flock 描述符瞬时残留实测 ~50% flake，已驯服）。
+      23 单测含中断/超时时序与并行 worktree 隔离。spawn_task 编排随 MCP
+      消费方落在 P1-4。）
 - [ ] **P1-4 MCP 北向五件套**：spawn_task（含 worktree 分配）/ status / tail（摘要，
       非原始流）/ reply / interrupt。
 - [ ] **P1-5 可靠性层**：judge 钩子（cargo test 等判卷命令随任务注册）、同签名失败

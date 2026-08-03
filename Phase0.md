@@ -329,6 +329,21 @@ vLLM 侧无需担心并发：continuous batching 下多实例同时请求反而�
 多个 agent 同时改文件、要审批、在不同时刻结束，跟踪它们正是大多数 swarm 方案垮掉的地方。
 这个"管不住"就是 supervisor bridge 要补的缺。
 
+**2026-08-03 深夜设计注记（sock 拓扑讨论，Phase 2/3 输入）**：
+
+- stdio → Unix socket 的本质是把会话从「进程属性」升格为「有主权的常驻服务」：
+  多客户端约会点、late join、断线重连——恰好补上控制隧道实验量出的三缺
+  （所有权 / 锁 / 通知）。TUI 降级为客户端之一后，supervisor 注入自动对人类可见。
+- supervisor 走 sock = 绕开 MCP 工具层 = **60s 天花板消失**。Claude 的持续监督形态 =
+  连接器进程持锁 + 事件 journal + 唤醒机制（回合制在场，秒~几十秒延迟）；亚秒级
+  硬实时用分层监督：策略下发给连接器执行，例外唤醒 supervisor 裁决。
+- 多 agent 接入（GPT 等）四纪律：角色三档（观察/顾问/执行）且**执行租约唯一**、
+  事件 author 归因（UDS peer cred 只认 OS 用户，身份须应用层握手——隧道实验里
+  qwen 已把 supervisor 注入误记在 Kit 头上）、server 串行化回合写入、
+  EIMP 降为发现/通知面 + sock 做数据面。
+- 三方共享终端两条路：正式版 = app-server 挂 sock + TUI 客户端化（Phase 2）；
+  零代码原型 = tmux（send-keys 注入 + capture-pane 读屏），列 Phase 2 预研第一项。
+
 ---
 
 ## 参考链接

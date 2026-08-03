@@ -3,8 +3,10 @@
 基于 openai/codex（Rust）fork 的**本地模型 CLI agent**。核心特性：可被 frontier agent
 （Claude Desktop / Claude Code）通过 MCP 监督执行——分配任务、监控进度、审批、打断。
 
-- **当前阶段：Phase 0**（零代码链路验证）。完整计划、技术路线决策及理由都在
-  [Phase0.md](Phase0.md)——新 session 先读它，按 §3 任务清单从未勾选项继续。
+- **当前阶段：Phase 1**（bridge v1 冲刺）。开工图纸 [Phase1.md](Phase1.md)——新
+  session 先读它，按 §3 任务清单从未勾选项继续；Phase 0 全部实测与 17 条需求清单
+  见 [Phase0.md](Phase0.md) + [results/phase0-results.md](results/phase0-results.md)
+  （2026-08-03 通关，commit b768816）。
 - 本地模型（2026-08-03 实测）：Qwen3.6-35B-A3B **NVFP4**（NVIDIA 官方权重，vLLM @
   spark1.local:8000 即 DGX Spark，profile `qwen36`；`qwen36-deep` 暂同模型占位）、
   Gemma 4-31B（本机 omlx @ 127.0.0.1:9999，profile

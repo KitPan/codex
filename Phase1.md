@@ -69,8 +69,15 @@
       单例锁加有界重试（flock 描述符瞬时残留实测 ~50% flake，已驯服）。
       23 单测含中断/超时时序与并行 worktree 隔离。spawn_task 编排随 MCP
       消费方落在 P1-4。）
-- [ ] **P1-4 MCP 北向五件套**：spawn_task（含 worktree 分配）/ status / tail（摘要，
+- [x] **P1-4 MCP 北向五件套**：spawn_task（含 worktree 分配）/ status / tail（摘要，
       非原始流）/ reply / interrupt。
+      （✅ 2026-08-04 凌晨：fork commit `23f82f30d8`。rmcp 1.8 stdio server；
+      service 编排层=租约+worktree+发射+后台驱动器（thread.started 一到即持久化
+      #2 映射）；judge 按 #9 硬化（pipefail+600s+进程组）；启动恢复扫尸；tail
+      读盘逐行摘要（#15 原始流不过北向）。26 单测+4 端到端（假 codex 全生命周期：
+      判卷生死、interrupt 弃分支、重启扫尸、reply 带 resume+模型亲和）+ 真身
+      MCP 握手冒烟五件套在列。接线：`claude mcp add rdos-supervisor --env
+      CODEX_HOME=/Users/kit/.rdos -- <fork>/codex-rs/target/debug/rdos-supervisor`。）
 - [ ] **P1-5 可靠性层**：judge 钩子（cargo test 等判卷命令随任务注册）、同签名失败
       熔断、南向重试+preflight、diff-first 落盘开关。
 - [ ] **P1-6 模型登记与分派**：三台助理入登记表（量化/引擎/延迟/推理档），

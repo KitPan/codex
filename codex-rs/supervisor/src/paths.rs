@@ -57,6 +57,11 @@ impl SupervisorHome {
         self.state_root().join("worktrees")
     }
 
+    /// 原始事件流归档（`<task-id>.jsonl` + `.stderr.log`；#15 北向只摘要）。
+    pub fn events_dir(&self) -> PathBuf {
+        self.state_root().join("events")
+    }
+
     /// 模型登记表：放 CODEX_HOME 顶层（`*.toml` 白名单使其随 repo 版本化）。
     pub fn models_path(&self) -> PathBuf {
         self.codex_home.join("supervisor.models.toml")
@@ -71,6 +76,7 @@ impl SupervisorHome {
         std::fs::create_dir_all(self.tasks_dir())?;
         std::fs::create_dir_all(self.sessions_dir())?;
         std::fs::create_dir_all(self.worktrees_dir())?;
+        std::fs::create_dir_all(self.events_dir())?;
         Ok(())
     }
 

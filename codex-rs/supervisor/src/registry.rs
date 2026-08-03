@@ -45,6 +45,14 @@ impl std::fmt::Display for TaskId {
     }
 }
 
+impl std::str::FromStr for TaskId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
+}
+
 /// 机器判卷结果（#5）：模型自我汇报零可信（假完成 ×4 实测），
 /// 完成态必须携带判卷命令的客观结论。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +180,12 @@ pub struct TaskRecord {
     pub events_path: Option<PathBuf>,
     /// 南向自动重试计数（#7）。
     pub retries: u32,
+    /// 终局 token 用量（最后一个 `turn.completed`；北向 status 直读此处）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<codex_exec::Usage>,
+    /// 最后一条 agent 文本回复（截断存档；全文在 events 原始流里）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_agent_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -188,6 +202,8 @@ impl TaskRecord {
             worktree_path: None,
             events_path: None,
             retries: 0,
+            usage: None,
+            last_agent_message: None,
             created_at: now,
             updated_at: now,
         }

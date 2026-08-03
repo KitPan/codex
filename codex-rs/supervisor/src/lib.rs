@@ -14,6 +14,7 @@
 //! |---|---|---|---|
 //! | [`paths`] | 状态目录布局、原子持久化、单例锁 | #2 #4 #17 | P1-2 |
 //! | [`registry`] | 任务注册表与生命周期状态机 | #1 | P1-2/P1-3 |
+//! | [`service`] | 编排层：五件套语义 + 恢复扫描 + judge | #1 #2 #5 | P1-4 |
 //! | [`session`] | 会话自持、持久化、所有权与锁 | #2 #3 #4 | P1-2 |
 //! | [`models`] | 模型登记表与三维分派路由 | #10 #11 #12 | P1-2/P1-6 |
 //! | [`executor`] | 南向执行器（spawn `codex exec --json`） | #7 #9 #17 | P1-3 |
@@ -31,5 +32,6 @@ pub mod models;
 pub mod observe;
 pub mod paths;
 pub mod registry;
+pub mod service;
 pub mod session;
 pub mod worktree;

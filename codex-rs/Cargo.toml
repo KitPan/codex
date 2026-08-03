@@ -126,6 +126,8 @@ members = [
     "codex-experimental-api-macros",
     "plugin",
     "model-provider",
+    # rdos fork: supervisor bridge crate (kept last to minimize rebase conflicts)
+    "supervisor",
 ]
 resolver = "2"
 

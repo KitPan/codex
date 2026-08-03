@@ -1,0 +1,19 @@
+[package]
+name = "codex-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rdos-supervisor"
+path = "src/main.rs"
+
+[lib]
+name = "codex_supervisor"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]

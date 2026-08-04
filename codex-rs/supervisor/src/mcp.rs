@@ -55,6 +55,8 @@ pub struct SpawnTaskParams {
     pub worktree: Option<String>,
     /// 完成后保留任务分支供审查（默认 true）
     pub diff_first: Option<bool>,
+    /// 熔断阈值：连续同签名工具失败 N 次自动中止（默认 5）
+    pub breaker_threshold: Option<u32>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -126,6 +128,7 @@ impl SupervisorServer {
                 worktree,
                 session: SessionTarget::New,
                 diff_first: p.diff_first.unwrap_or(true),
+                breaker_threshold: p.breaker_threshold,
             })
             .await
             .map_err(map_err)?;

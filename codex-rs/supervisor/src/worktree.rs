@@ -25,6 +25,8 @@ pub struct WorktreeHandle {
     pub task_cwd: PathBuf,
     /// 任务分支 `rdos/task/<id>`。
     pub branch: String,
+    /// 分支出生点 sha（diff 基准，与 main 后续移动无关）。
+    pub base: String,
 }
 
 /// 回收策略：分支去留（worktree 目录一律移除）。
@@ -73,6 +75,7 @@ pub fn allocate(
     })?;
     let worktree_root = home.worktrees_dir().join(task.to_string());
     let branch = format!("rdos/task/{task}");
+    let base = run_git(&repo_root, &["rev-parse", "HEAD"])?.trim().to_string();
 
     run_git(
         &repo_root,
@@ -91,7 +94,48 @@ pub fn allocate(
         repo_root,
         worktree_root,
         branch,
+        base,
     })
+}
+
+/// #8 diff-first 落盘：把 worktree 脏区自动 commit 到任务分支。
+///
+/// 模型改文件通常不 commit——不落盘就回收 worktree 等于把产出连同证据一起
+/// 丢掉。返回是否发生了提交（干净工作区 = false）。
+pub fn commit_dirty(handle: &WorktreeHandle, message: &str) -> Result<bool, WorktreeError> {
+    let dirty = run_git(&handle.worktree_root, &["status", "--porcelain"])?;
+    if dirty.trim().is_empty() {
+        return Ok(false);
+    }
+    run_git(&handle.worktree_root, &["add", "-A"])?;
+    run_git(
+        &handle.worktree_root,
+        &[
+            "-c",
+            "user.name=rdos-supervisor",
+            "-c",
+            "user.email=supervisor@rdos.local",
+            "commit",
+            "-q",
+            "-m",
+            message,
+        ],
+    )?;
+    Ok(true)
+}
+
+/// 任务分支相对出生点的 `diff --stat` 摘要（无差异 = None）。
+pub fn diff_stat(handle: &WorktreeHandle) -> Result<Option<String>, WorktreeError> {
+    let stat = run_git(
+        &handle.repo_root,
+        &["diff", "--stat", &handle.base, &handle.branch],
+    )?;
+    let stat = stat.trim();
+    if stat.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(stat.to_string()))
+    }
 }
 
 /// 回收 worktree（目录移除；分支按 [`ReclaimMode`] 处置）。
@@ -223,6 +267,37 @@ mod tests {
         reclaim(&b, ReclaimMode::KeepBranch).expect("reclaim b");
         let branches = run_git(&b.repo_root, &["branch", "--list", &b.branch]).expect("list");
         assert!(branches.contains(&b.branch), "KeepBranch must preserve branch");
+    }
+
+    #[test]
+    fn dirty_worktree_survives_reclaim_via_commit() {
+        let repo = init_repo();
+        let home_dir = TempDir::new().expect("home");
+        let home = SupervisorHome::new(home_dir.path());
+        let handle = allocate(&home, TaskId::new(), repo.path()).expect("allocate");
+
+        // 干净区不产生提交。
+        assert!(!commit_dirty(&handle, "noop").expect("clean check"));
+        assert_eq!(diff_stat(&handle).expect("no diff"), None);
+
+        // 模型式改动：改一个、加一个，不 commit。
+        std::fs::write(handle.worktree_root.join("proj/src/lib.rs"), "// changed\n")
+            .expect("modify");
+        std::fs::write(handle.worktree_root.join("proj/new.rs"), "// new\n").expect("add");
+        assert!(commit_dirty(&handle, "task output").expect("commit"));
+
+        let stat = diff_stat(&handle).expect("stat").expect("some diff");
+        assert!(stat.contains("proj/src/lib.rs"), "stat: {stat}");
+        assert!(stat.contains("2 files changed"), "stat: {stat}");
+
+        // 回收目录、保留分支后，产出仍可经分支取回。
+        reclaim(&handle, ReclaimMode::KeepBranch).expect("reclaim");
+        let show = run_git(
+            &handle.repo_root,
+            &["show", &format!("{}:proj/new.rs", handle.branch)],
+        )
+        .expect("show");
+        assert_eq!(show, "// new\n");
     }
 
     #[test]

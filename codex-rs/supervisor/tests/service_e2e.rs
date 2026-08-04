@@ -80,37 +80,38 @@ fn write_fake_codex(dir: &Path, body: &str) -> PathBuf {
     path
 }
 
+fn base_entry() -> ModelEntry {
+    ModelEntry {
+        served_name: "fake-model".to_string(),
+        thinking: ThinkingDefault::Off,
+        latency: LatencyClass::Fast,
+        write_tasks: WriteTaskSupport::Reliable,
+        quant_damage: Vec::new(),
+        family_traits: Vec::new(),
+        endpoint_probe: None,
+        escalation_note: None,
+        notes: None,
+        provider: ProviderRef {
+            id: "rdos-test".to_string(),
+            base_url: None,
+            wire_api: None,
+        },
+        engine: EngineInfo {
+            kind: "fake".to_string(),
+            version: None,
+        },
+        quantization: Quantization {
+            format: "none".to_string(),
+            bits: None,
+        },
+        inject: None,
+    }
+}
+
 fn seed_registry(codex_home: &Path) {
     let home = SupervisorHome::new(codex_home);
     let mut registry = ModelRegistry::new();
-    registry.models.insert(
-        "fake".to_string(),
-        ModelEntry {
-            served_name: "fake-model".to_string(),
-            thinking: ThinkingDefault::Off,
-            latency: LatencyClass::Fast,
-            write_tasks: WriteTaskSupport::Reliable,
-            quant_damage: Vec::new(),
-            family_traits: Vec::new(),
-            endpoint_probe: None,
-            escalation_note: None,
-            notes: None,
-            provider: ProviderRef {
-                id: "rdos-test".to_string(),
-                base_url: None,
-                wire_api: None,
-            },
-            engine: EngineInfo {
-                kind: "fake".to_string(),
-                version: None,
-            },
-            quantization: Quantization {
-                format: "none".to_string(),
-                bits: None,
-            },
-            inject: None,
-        },
-    );
+    registry.models.insert("fake".to_string(), base_entry());
     registry.save(&home).expect("seed registry");
 }
 
@@ -155,6 +156,7 @@ fn spawn_request(prompt: &str, repo: &Path) -> SpawnRequest {
         worktree: WorktreePolicy::Isolated,
         session: SessionTarget::New,
         diff_first: true,
+        breaker_threshold: None,
     }
 }
 
@@ -268,6 +270,7 @@ async fn restart_sweeps_stale_running_tasks() {
         worktree: WorktreePolicy::InPlace,
         session: SessionTarget::New,
         timeout_secs: None,
+        breaker_threshold: None,
     });
     let mut session = SessionRecord::new(
         ModelAffinity {
@@ -303,6 +306,226 @@ async fn restart_sweeps_stale_running_tasks() {
     assert!(views[0].state.starts_with("failed"), "got {}", views[0].state);
     let sessions = SessionRecord::load_all(&home).expect("sessions");
     assert_eq!(sessions.records[0].owner, SessionOwner::Free);
+}
+
+fn failed_cmd_item(id: u32) -> String {
+    format!(
+        "echo '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"f{id}\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc `apply_patch <<PATCH`\",\"aggregated_output\":\"\",\"exit_code\":1,\"status\":\"failed\"}}}}'\n"
+    )
+}
+
+const OK_CMD_ITEM: &str = "echo '{\"type\":\"item.completed\",\"item\":{\"id\":\"ok1\",\"type\":\"command_execution\",\"command\":\"cargo test\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}}'\n";
+const TURN_OK: &str = "echo '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}'\n";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn breaker_trips_on_consecutive_same_signature_failures() {
+    let repo = init_repo();
+    let home_dir = TempDir::new().expect("home");
+    seed_registry(home_dir.path());
+    let mut body = String::from("echo '{\"type\":\"thread.started\",\"thread_id\":\"t-brk\"}'\n");
+    for i in 0..5 {
+        body.push_str(&failed_cmd_item(i));
+    }
+    body.push_str("sleep 30\n"); // 熔断必须主动杀，而不是等它自己死
+    let bin = write_fake_codex(home_dir.path(), &body);
+    let supervisor = start_supervisor(home_dir.path(), bin);
+
+    let started = std::time::Instant::now();
+    let reply = supervisor
+        .spawn_task(spawn_request("连败任务", repo.path()))
+        .await
+        .expect("spawn");
+    let view = wait_for(&supervisor, &reply.task_id, |v| v.state.starts_with("failed")).await;
+    assert!(view.state.contains("熔断"), "state: {}", view.state);
+    assert!(view.state.contains("apply_patch"), "state: {}", view.state);
+    assert!(started.elapsed() < Duration::from_secs(10), "must kill, not wait");
+    assert_eq!(view.retries, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn breaker_resets_on_success_between_failures() {
+    let repo = init_repo();
+    let home_dir = TempDir::new().expect("home");
+    seed_registry(home_dir.path());
+    let mut body = String::from("echo '{\"type\":\"thread.started\",\"thread_id\":\"t-rst\"}'\n");
+    for i in 0..4 {
+        body.push_str(&failed_cmd_item(i));
+    }
+    body.push_str(OK_CMD_ITEM);
+    for i in 10..14 {
+        body.push_str(&failed_cmd_item(i));
+    }
+    body.push_str(TURN_OK);
+    let bin = write_fake_codex(home_dir.path(), &body);
+    let supervisor = start_supervisor(home_dir.path(), bin);
+
+    let reply = supervisor
+        .spawn_task(spawn_request("有救的任务", repo.path()))
+        .await
+        .expect("spawn");
+    let view = wait_for(&supervisor, &reply.task_id, |v| {
+        !v.state.starts_with("running") && !v.state.starts_with("pending")
+    })
+    .await;
+    assert!(
+        view.state.starts_with("completed"),
+        "4 败 + 1 成 + 4 败不该熔断（阈值 5）: {}",
+        view.state
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transient_failure_retries_and_recovers() {
+    let repo = init_repo();
+    let home_dir = TempDir::new().expect("home");
+    seed_registry(home_dir.path());
+    // 首发装死（无任何工具活动 + 南向瞬时特征），第二发正常。
+    let bin = write_fake_codex(
+        home_dir.path(),
+        concat!(
+            "if [ ! -f .rdos-attempt ]; then\n",
+            "  touch .rdos-attempt\n",
+            "  echo 'stream disconnected before completion: error sending request' 1>&2\n",
+            "  exit 1\n",
+            "fi\n",
+            "echo '{\"type\":\"thread.started\",\"thread_id\":\"t-retry\"}'\n",
+            "echo '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}'\n",
+        ),
+    );
+    let supervisor = start_supervisor(home_dir.path(), bin);
+    let reply = supervisor
+        .spawn_task(spawn_request("预热撞墙", repo.path()))
+        .await
+        .expect("spawn");
+    let view = wait_for(&supervisor, &reply.task_id, |v| {
+        !v.state.starts_with("running") && !v.state.starts_with("pending")
+    })
+    .await;
+    assert!(view.state.starts_with("completed"), "state: {}", view.state);
+    assert_eq!(view.retries, 1, "应恰好重试一次");
+
+    // 两个 attempt 的原始流各自留档。
+    let home = SupervisorHome::new(home_dir.path());
+    assert!(home.events_dir().join(format!("{}.jsonl", reply.task_id)).exists());
+    assert!(home.events_dir().join(format!("{}.a2.jsonl", reply.task_id)).exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_transient_failure_does_not_retry() {
+    let repo = init_repo();
+    let home_dir = TempDir::new().expect("home");
+    seed_registry(home_dir.path());
+    let bin = write_fake_codex(
+        home_dir.path(),
+        "echo 'error[E0308]: mismatched types' 1>&2\nexit 1\n",
+    );
+    let supervisor = start_supervisor(home_dir.path(), bin);
+    let reply = supervisor
+        .spawn_task(spawn_request("真错误", repo.path()))
+        .await
+        .expect("spawn");
+    let view = wait_for(&supervisor, &reply.task_id, |v| v.state.starts_with("failed")).await;
+    assert_eq!(view.retries, 0, "非瞬时故障不得重试");
+    assert!(view.state.contains("E0308"), "stderr 尾行应入错误: {}", view.state);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dirty_worktree_output_is_preserved_as_diff() {
+    let repo = init_repo();
+    let home_dir = TempDir::new().expect("home");
+    seed_registry(home_dir.path());
+    // 模型式行为：改文件但不 commit。
+    let bin = write_fake_codex(
+        home_dir.path(),
+        concat!(
+            "echo '{\"type\":\"thread.started\",\"thread_id\":\"t-diff\"}'\n",
+            "echo 'patched' > README.md\n",
+            "echo 'new file' > OUTPUT.txt\n",
+            "echo '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}'\n",
+        ),
+    );
+    let supervisor = start_supervisor(home_dir.path(), bin);
+    let reply = supervisor
+        .spawn_task(spawn_request("写任务", repo.path()))
+        .await
+        .expect("spawn");
+    let view = wait_for(&supervisor, &reply.task_id, |v| {
+        !v.state.starts_with("running") && !v.state.starts_with("pending")
+    })
+    .await;
+    assert!(view.state.starts_with("completed"), "state: {}", view.state);
+
+    let stat = view.diff_stat.expect("diff_stat 必须落盘");
+    assert!(stat.contains("OUTPUT.txt") && stat.contains("README.md"), "stat: {stat}");
+
+    // worktree 已回收，但产出经分支可取回（#8 的全部意义）。
+    let branch = reply.worktree_branch.expect("branch");
+    let shown = run_git(repo.path(), &["show", &format!("{branch}:OUTPUT.txt")]);
+    assert_eq!(shown, "new file\n");
+    let home = SupervisorHome::new(home_dir.path());
+    assert!(!home.worktrees_dir().join(&reply.task_id).exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preflight_blocks_dead_endpoint_and_passes_live_one() {
+    let repo = init_repo();
+    let home_dir = TempDir::new().expect("home");
+
+    // 活端点：最小 HTTP 200 应答器。
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let live_url = format!("http://{}/v1/models", listener.local_addr().expect("addr"));
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                use tokio::io::AsyncWriteExt;
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                    .await;
+            });
+        }
+    });
+
+    // 登记两个带探针的条目：一个指死端口，一个指活应答器。
+    let home = SupervisorHome::new(home_dir.path());
+    let mut registry = ModelRegistry::new();
+    for (key, probe) in [
+        ("dead", "http://127.0.0.1:1/v1/models".to_string()),
+        ("live", live_url),
+    ] {
+        let mut entry = base_entry();
+        entry.endpoint_probe = Some(probe);
+        registry.models.insert(key.to_string(), entry);
+    }
+    registry.save(&home).expect("seed");
+
+    let bin = write_fake_codex(
+        home_dir.path(),
+        concat!(
+            "echo '{\"type\":\"thread.started\",\"thread_id\":\"t-pf\"}'\n",
+            "echo '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}'\n",
+        ),
+    );
+    let supervisor = start_supervisor(home_dir.path(), bin);
+
+    let mut req = spawn_request("探针任务", repo.path());
+    req.model_key = "dead".to_string();
+    let err = supervisor.spawn_task(req).await.expect_err("dead 必须拒");
+    let text = err.to_string();
+    assert!(text.contains("preflight") && text.contains("端口拒连"), "err: {text}");
+    assert!(supervisor.status(None).expect("status").is_empty(), "拒发不得留任务记录");
+
+    let mut req = spawn_request("探针任务", repo.path());
+    req.model_key = "live".to_string();
+    let reply = supervisor.spawn_task(req).await.expect("live 必须放行");
+    let view = wait_for(&supervisor, &reply.task_id, |v| {
+        !v.state.starts_with("running") && !v.state.starts_with("pending")
+    })
+    .await;
+    assert!(view.state.starts_with("completed"), "state: {}", view.state);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

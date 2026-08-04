@@ -161,6 +161,10 @@ pub struct TaskSpec {
     /// 任务级硬超时（#9：沙箱禁网静默丢包实测，无超时=吊死）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+    /// 熔断阈值：连续同签名工具失败 N 次自动中止（#6；缺省见 service 层常量。
+    /// 实测依据：apply_patch 328 连败烧 36 分钟无熔断）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breaker_threshold: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,6 +190,10 @@ pub struct TaskRecord {
     /// 最后一条 agent 文本回复（截断存档；全文在 events 原始流里）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_agent_message: Option<String>,
+    /// 任务分支的 diff --stat 摘要（#8：diff-first 落盘后由 finalize 记录，
+    /// 供 supervisor 审查决策；全量 diff 用 `git diff main...rdos/task/<id>`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_stat: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -204,6 +212,7 @@ impl TaskRecord {
             retries: 0,
             usage: None,
             last_agent_message: None,
+            diff_stat: None,
             created_at: now,
             updated_at: now,
         }
@@ -261,6 +270,7 @@ mod tests {
             worktree: WorktreePolicy::Isolated,
             session: SessionTarget::New,
             timeout_secs: Some(600),
+            breaker_threshold: None,
         }
     }
 

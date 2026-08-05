@@ -151,6 +151,9 @@ pub struct Supervisor {
     exec: ExecutorConfig,
     registry: ModelRegistry,
     state: Mutex<State>,
+    /// provider 中间件登记处（#14；P1-7）：带 inject 参数的模型经进程内
+    /// 注入代理接上游，per-model 共享监听器。
+    middleware: crate::middleware::MiddlewareHub,
     _lock: SupervisorLock,
 }
 
@@ -226,6 +229,7 @@ impl Supervisor {
                 sessions,
                 running: HashMap::new(),
             }),
+            middleware: crate::middleware::MiddlewareHub::default(),
             _lock: lock,
         });
         Ok((supervisor, report))
@@ -236,6 +240,9 @@ impl Supervisor {
         let entry = self.registry.resolve(&req.model_key)?.clone();
         // preflight 先于一切资源分配（#7：起任务前端点探测；#16：离线分诊）。
         self.preflight(&req.model_key, &entry).await?;
+        // provider 中间件（#14；P1-7）：带 inject 参数的模型把 base_url 指向
+        // 进程内注入代理（per-model 共享监听器，惰性起步）。
+        let middleware_base = self.ensure_middleware(&req.model_key, &entry).await?;
 
         // escalation 规范注入（#11；P1-6）：新会话首轮注入一次；resume 的会话
         // 历史里已有，重复注入徒增上下文噪音。spec/plan 记录实际发射文本
@@ -323,7 +330,7 @@ impl Supervisor {
 
         // 发射计划：路由显式 model + model_provider + reasoning 档（#12 #11）；
         // resume 时一并注入模型亲和，杜绝 `exec resume` 回落缺省的语义差（#3）。
-        let overrides = plan_overrides(&entry);
+        let overrides = plan_overrides(&entry, middleware_base.as_deref());
         let resume_id = {
             let state = self.lock_state();
             match req.session {
@@ -428,6 +435,37 @@ impl Supervisor {
             breaker_threshold: None,
         })
         .await
+    }
+
+    /// provider 中间件挂载（#14）：模型带 inject 参数时惰性起 per-model
+    /// 注入代理，返回给 codex 的替代 base_url；无 inject 返回 None（直连）。
+    /// inject 模型必须在登记表带 provider.base_url（裸 IP 上游）——中间件
+    /// 不读 codex config，上游从这里来。
+    async fn ensure_middleware(
+        &self,
+        model_key: &str,
+        entry: &crate::models::ModelEntry,
+    ) -> Result<Option<String>, ServiceError> {
+        let Some(inject) = &entry.inject else {
+            return Ok(None);
+        };
+        if inject.temperature.is_none() {
+            return Ok(None);
+        }
+        let upstream = entry
+            .provider
+            .base_url
+            .as_deref()
+            .ok_or_else(|| ServiceError::Internal {
+                message: format!(
+                    "模型 {model_key} 带 inject 参数但登记表缺 provider.base_url——中间件不知上游在哪"
+                ),
+            })?;
+        let base = self
+            .middleware
+            .ensure(model_key, upstream, inject, &self.home.audit_dir())
+            .await?;
+        Ok(Some(base))
     }
 
     /// preflight（#7/#16）：探测登记表里的裸 IP 端点，不通则拒绝起任务并给出
@@ -908,14 +946,20 @@ fn view_of(record: &TaskRecord) -> TaskStatusView {
     }
 }
 
-/// 分派 overrides 组装（#12 #11）：显式 provider 路由（含嵌套 provider 定义
-/// 继承）+ reasoning 档下发（`model_reasoning_effort`）。
-fn plan_overrides(entry: &crate::models::ModelEntry) -> Vec<(String, String)> {
+/// 分派 overrides 组装（#12 #11 #14）：显式 provider 路由（含嵌套 provider
+/// 定义继承）+ reasoning 档下发（`model_reasoning_effort`）。
+/// `middleware_base` Some 时 base_url 指向进程内注入代理（登记表 base_url
+/// 降级为中间件的上游，不再直达 codex）。
+fn plan_overrides(
+    entry: &crate::models::ModelEntry,
+    middleware_base: Option<&str>,
+) -> Vec<(String, String)> {
     let mut overrides = vec![(
         "model_provider".to_string(),
         format!("\"{}\"", entry.provider.id),
     )];
-    if let Some(base_url) = &entry.provider.base_url {
+    let effective_base = middleware_base.or(entry.provider.base_url.as_deref());
+    if let Some(base_url) = effective_base {
         overrides.push((
             format!("model_providers.{}.base_url", entry.provider.id),
             format!("\"{base_url}\""),
@@ -1180,7 +1224,7 @@ mod tests {
 
     #[test]
     fn plan_overrides_carry_reasoning_tier_when_registered() {
-        let with = plan_overrides(&entry(Some(ReasoningEffort::High), None));
+        let with = plan_overrides(&entry(Some(ReasoningEffort::High), None), None);
         assert!(
             with.contains(&(
                 "model_reasoning_effort".to_string(),
@@ -1188,10 +1232,36 @@ mod tests {
             )),
             "登记 reasoning 档必须下发：{with:?}"
         );
-        let without = plan_overrides(&entry(None, None));
+        let without = plan_overrides(&entry(None, None), None);
         assert!(
             without.iter().all(|(k, _)| k != "model_reasoning_effort"),
             "未登记不得下发（serve 缺省）：{without:?}"
+        );
+    }
+
+    #[test]
+    fn middleware_base_url_overrides_registry_upstream() {
+        let mut e = entry(None, None);
+        e.provider.base_url = Some("http://192.168.3.3:8000/v1".to_string());
+        let direct = plan_overrides(&e, None);
+        assert!(
+            direct.contains(&(
+                "model_providers.rdos-x.base_url".to_string(),
+                "\"http://192.168.3.3:8000/v1\"".to_string()
+            )),
+            "无中间件时直连登记表上游：{direct:?}"
+        );
+        let via_mw = plan_overrides(&e, Some("http://127.0.0.1:45678/v1"));
+        assert!(
+            via_mw.contains(&(
+                "model_providers.rdos-x.base_url".to_string(),
+                "\"http://127.0.0.1:45678/v1\"".to_string()
+            )),
+            "带 inject 的模型 base_url 必须指向中间件：{via_mw:?}"
+        );
+        assert!(
+            via_mw.iter().all(|(_, v)| !v.contains("192.168.3.3")),
+            "上游地址不得泄进 codex 侧 overrides：{via_mw:?}"
         );
     }
 
@@ -1268,6 +1338,8 @@ pub enum ServiceError {
     Worktree(#[from] crate::worktree::WorktreeError),
     #[error(transparent)]
     Exec(#[from] ExecError),
+    #[error(transparent)]
+    Middleware(#[from] crate::middleware::MiddlewareError),
     #[error("session {session} not found")]
     SessionNotFound { session: SessionId },
     #[error("session {session} has no resumable rollout (or model affinity is unresolvable)")]

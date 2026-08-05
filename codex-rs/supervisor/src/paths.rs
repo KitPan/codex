@@ -62,6 +62,11 @@ impl SupervisorHome {
         self.state_root().join("events")
     }
 
+    /// provider 中间件审计日志（`<model_key>.jsonl`，一行一请求；#14）。
+    pub fn audit_dir(&self) -> PathBuf {
+        self.state_root().join("audit")
+    }
+
     /// 模型登记表：放 CODEX_HOME 顶层（`*.toml` 白名单使其随 repo 版本化）。
     pub fn models_path(&self) -> PathBuf {
         self.codex_home.join("supervisor.models.toml")
@@ -77,6 +82,7 @@ impl SupervisorHome {
         std::fs::create_dir_all(self.sessions_dir())?;
         std::fs::create_dir_all(self.worktrees_dir())?;
         std::fs::create_dir_all(self.events_dir())?;
+        std::fs::create_dir_all(self.audit_dir())?;
         Ok(())
     }
 

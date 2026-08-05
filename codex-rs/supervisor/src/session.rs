@@ -97,6 +97,18 @@ pub enum ReasoningEffort {
     High,
 }
 
+impl ReasoningEffort {
+    /// codex 配置键 `model_reasoning_effort` 的传值形态（上游 serde 小写）。
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            ReasoningEffort::Minimal => "minimal",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+        }
+    }
+}
+
 /// 模型亲和（#3）：`exec resume` 不继承原会话模型（实测回落 base 缺省），
 /// 因此 bridge 必须持有并在每次续接时显式注入。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

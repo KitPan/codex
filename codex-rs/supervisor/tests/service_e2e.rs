@@ -85,6 +85,7 @@ fn base_entry() -> ModelEntry {
         served_name: "fake-model".to_string(),
         thinking: ThinkingDefault::Off,
         latency: LatencyClass::Fast,
+        reasoning: None,
         write_tasks: WriteTaskSupport::Reliable,
         quant_damage: Vec::new(),
         family_traits: Vec::new(),

@@ -237,8 +237,14 @@ impl Supervisor {
         // preflight 先于一切资源分配（#7：起任务前端点探测；#16：离线分诊）。
         self.preflight(&req.model_key, &entry).await?;
 
+        // escalation 规范注入（#11；P1-6）：新会话首轮注入一次；resume 的会话
+        // 历史里已有，重复注入徒增上下文噪音。spec/plan 记录实际发射文本
+        // （审计真相），不是监督者的原始输入。
+        let is_resume = matches!(req.session, SessionTarget::Resume { .. });
+        let launch_prompt = compose_task_prompt(&req.prompt, &entry, is_resume);
+
         let spec = TaskSpec {
-            prompt: req.prompt.clone(),
+            prompt: launch_prompt.clone(),
             model_key: req.model_key.clone(),
             cwd: req.cwd.clone(),
             sandbox: req.sandbox,
@@ -262,7 +268,7 @@ impl Supervisor {
                         ModelAffinity {
                             model: entry.served_name.clone(),
                             provider: entry.provider.clone(),
-                            reasoning: None,
+                            reasoning: entry.reasoning,
                         },
                         req.sandbox,
                         ApprovalPolicy::Never,
@@ -315,24 +321,9 @@ impl Supervisor {
             task.worktree_path = Some(handle.worktree_root.clone());
         }
 
-        // 发射计划：路由显式 model + model_provider（#12）；resume 时一并注入
-        // 模型亲和，杜绝 `exec resume` 回落缺省的语义差（#3）。
-        let mut overrides = vec![(
-            "model_provider".to_string(),
-            format!("\"{}\"", entry.provider.id),
-        )];
-        if let Some(base_url) = &entry.provider.base_url {
-            overrides.push((
-                format!("model_providers.{}.base_url", entry.provider.id),
-                format!("\"{base_url}\""),
-            ));
-        }
-        if let Some(wire_api) = &entry.provider.wire_api {
-            overrides.push((
-                format!("model_providers.{}.wire_api", entry.provider.id),
-                format!("\"{wire_api}\""),
-            ));
-        }
+        // 发射计划：路由显式 model + model_provider + reasoning 档（#12 #11）；
+        // resume 时一并注入模型亲和，杜绝 `exec resume` 回落缺省的语义差（#3）。
+        let overrides = plan_overrides(&entry);
         let resume_id = {
             let state = self.lock_state();
             match req.session {
@@ -344,7 +335,7 @@ impl Supervisor {
             }
         };
         let plan = LaunchPlan {
-            prompt: req.prompt,
+            prompt: launch_prompt,
             model: Some(entry.served_name.clone()),
             sandbox: req.sandbox,
             cwd: worktree_handle
@@ -763,10 +754,10 @@ impl Supervisor {
                         let _ = session.save(&self.home);
                     }
                 }
-                ExecutorEvent::Parsed(ThreadEvent::ItemStarted(item)) => {
-                    if is_tool_item(&item.item.details) {
-                        watch.saw_tool_activity = true;
-                    }
+                ExecutorEvent::Parsed(ThreadEvent::ItemStarted(item))
+                    if is_tool_item(&item.item.details) =>
+                {
+                    watch.saw_tool_activity = true;
                 }
                 ExecutorEvent::Parsed(ThreadEvent::ItemCompleted(item)) => {
                     if is_tool_item(&item.item.details) {
@@ -917,6 +908,49 @@ fn view_of(record: &TaskRecord) -> TaskStatusView {
     }
 }
 
+/// 分派 overrides 组装（#12 #11）：显式 provider 路由（含嵌套 provider 定义
+/// 继承）+ reasoning 档下发（`model_reasoning_effort`）。
+fn plan_overrides(entry: &crate::models::ModelEntry) -> Vec<(String, String)> {
+    let mut overrides = vec![(
+        "model_provider".to_string(),
+        format!("\"{}\"", entry.provider.id),
+    )];
+    if let Some(base_url) = &entry.provider.base_url {
+        overrides.push((
+            format!("model_providers.{}.base_url", entry.provider.id),
+            format!("\"{base_url}\""),
+        ));
+    }
+    if let Some(wire_api) = &entry.provider.wire_api {
+        overrides.push((
+            format!("model_providers.{}.wire_api", entry.provider.id),
+            format!("\"{wire_api}\""),
+        ));
+    }
+    if let Some(reasoning) = entry.reasoning {
+        overrides.push((
+            "model_reasoning_effort".to_string(),
+            format!("\"{}\"", reasoning.cli_name()),
+        ));
+    }
+    overrides
+}
+
+/// escalation 规范注入（#11；P1-6）：「on-request 依赖模型自觉，不教不会」——
+/// 登记表的 escalation_note 随任务模板下发。只注入新会话；resume 历史已含。
+fn compose_task_prompt(
+    user_prompt: &str,
+    entry: &crate::models::ModelEntry,
+    is_resume: bool,
+) -> String {
+    match (&entry.escalation_note, is_resume) {
+        (Some(note), false) => {
+            format!("{user_prompt}\n\n---\n[监督规范 · 何时停手上报]\n{note}")
+        }
+        _ => user_prompt.to_string(),
+    }
+}
+
 /// 事件折叠期的观察结果。
 #[derive(Debug, Default)]
 struct StreamWatch {
@@ -1003,7 +1037,7 @@ fn is_tool_item(details: &ThreadItemDetails) -> bool {
 /// 有意取粗颗粒：328 连败实测是**同一工具配不同参数**——按完整命令串计数
 /// 永远数不到 2。`/bin/zsh -lc 'apply_patch <<EOF…'` → `apply_patch`。
 fn command_signature(command: &str) -> String {
-    let mut parts = command.trim().split_whitespace();
+    let mut parts = command.split_whitespace();
     let first = parts.next().unwrap_or("unknown");
     let head = first.rsplit('/').next().unwrap_or(first);
     if !matches!(head, "sh" | "zsh" | "bash") {
@@ -1106,7 +1140,74 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::EngineInfo;
+    use crate::models::ModelEntry;
+    use crate::models::ProviderRef;
+    use crate::models::Quantization;
+    use crate::models::ThinkingDefault;
+    use crate::models::WriteTaskSupport;
+    use crate::session::ReasoningEffort;
     use pretty_assertions::assert_eq;
+
+    fn entry(reasoning: Option<ReasoningEffort>, escalation: Option<&str>) -> ModelEntry {
+        ModelEntry {
+            served_name: "m".to_string(),
+            thinking: ThinkingDefault::Unknown,
+            latency: crate::models::LatencyClass::Fast,
+            reasoning,
+            write_tasks: WriteTaskSupport::Reliable,
+            quant_damage: Vec::new(),
+            family_traits: Vec::new(),
+            endpoint_probe: None,
+            escalation_note: escalation.map(str::to_string),
+            notes: None,
+            provider: ProviderRef {
+                id: "rdos-x".to_string(),
+                base_url: None,
+                wire_api: None,
+            },
+            engine: EngineInfo {
+                kind: "vllm".to_string(),
+                version: None,
+            },
+            quantization: Quantization {
+                format: "bf16".to_string(),
+                bits: None,
+            },
+            inject: None,
+        }
+    }
+
+    #[test]
+    fn plan_overrides_carry_reasoning_tier_when_registered() {
+        let with = plan_overrides(&entry(Some(ReasoningEffort::High), None));
+        assert!(
+            with.contains(&(
+                "model_reasoning_effort".to_string(),
+                "\"high\"".to_string()
+            )),
+            "登记 reasoning 档必须下发：{with:?}"
+        );
+        let without = plan_overrides(&entry(None, None));
+        assert!(
+            without.iter().all(|(k, _)| k != "model_reasoning_effort"),
+            "未登记不得下发（serve 缺省）：{without:?}"
+        );
+    }
+
+    #[test]
+    fn escalation_note_injected_for_new_sessions_only() {
+        let e = entry(None, Some("含糊即 ESCALATE"));
+        let composed = compose_task_prompt("修 bug", &e, false);
+        assert!(composed.starts_with("修 bug"), "用户指令保持在前");
+        assert!(composed.contains("何时停手上报") && composed.contains("含糊即 ESCALATE"));
+        assert_eq!(compose_task_prompt("续", &e, true), "续", "resume 不重复注入");
+        assert_eq!(
+            compose_task_prompt("裸", &entry(None, None), false),
+            "裸",
+            "无规范不加料"
+        );
+    }
 
     #[test]
     fn command_signature_strips_shell_wrappers_coarsely() {

@@ -97,13 +97,34 @@ fn summarize_item(details: &ThreadItemDetails) -> String {
             format!("web search: {}", snippet(&search.query, 80))
         }
         ThreadItemDetails::TodoList(todo) => format!("todo list ({} items)", todo.items.len()),
-        ThreadItemDetails::Error(error) => format!("item error: {}", snippet(&error.message, SNIPPET)),
+        ThreadItemDetails::Error(error) => {
+            // #10/#15（P1-6）：登记表模型必然不在 codex 云端目录，metadata
+            // fallback 警告是常态且实测无碍——降噪为已知信息，不再以 error
+            // 面目惊动北向。（catalog JSON 方案否决：base_instructions 必填，
+            // 会把某版系统提示词冻结进仓库，rebase 漂移雷。）
+            if is_known_benign_metadata_warning(&error.message) {
+                format!(
+                    "ℹ metadata fallback（已知无害，登记表模型不在云端目录）: {}",
+                    snippet(&error.message, 60)
+                )
+            } else {
+                format!("item error: {}", snippet(&error.message, SNIPPET))
+            }
+        }
         // 未特化的 item 类型只报类型名，不透传内容。
         other => serde_json::to_value(other)
             .ok()
             .and_then(|v| v.get("type").and_then(|t| t.as_str().map(str::to_string)))
             .unwrap_or_else(|| "unknown item".to_string()),
     }
+}
+
+/// 已知无害警告识别（P1-6）：本地自定义模型触发的 codex metadata fallback。
+/// 匹配保持窄——只认这一条实测确认过的文案前缀，别的 error 一律原样上报。
+fn is_known_benign_metadata_warning(message: &str) -> bool {
+    message.starts_with("Model metadata for `")
+        && message.contains("not found")
+        && message.contains("fallback")
 }
 
 /// 按字符截断（多字节安全），超长加省略号。
@@ -157,6 +178,19 @@ mod tests {
         std::fs::write(&path, body).expect("write");
         let tail = tail_summarized(&path, 3).expect("tail");
         assert_eq!(tail, vec!["▶ thread t-7", "▶ thread t-8", "▶ thread t-9"]);
+    }
+
+    #[test]
+    fn metadata_fallback_warning_is_downgraded_but_other_errors_stay_loud() {
+        // 实弹 events 原文（2026-08-04，qwen/deepseek 双双触发）。
+        let known = r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `nvidia/Qwen3.6-35B-A3B-NVFP4` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}"#;
+        let summary = summarize_line(known);
+        assert!(summary.starts_with("✓ ℹ metadata fallback"), "{summary}");
+        assert!(!summary.contains("item error"), "已知无害不得以 error 面目出现");
+
+        let other = r#"{"type":"item.completed","item":{"id":"item_1","type":"error","message":"stream disconnected before completion"}}"#;
+        let loud = summarize_line(other);
+        assert!(loud.contains("item error"), "未知错误必须保持响亮：{loud}");
     }
 
     #[test]

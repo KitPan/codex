@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use crate::paths::StoreError;
 use crate::paths::SupervisorHome;
+use crate::session::ReasoningEffort;
 
 pub const MODELS_SCHEMA_VERSION: u32 = 1;
 
@@ -94,6 +95,10 @@ pub struct ModelEntry {
     pub served_name: String,
     pub thinking: ThinkingDefault,
     pub latency: LatencyClass,
+    /// 分派 reasoning 档（#11 三维之一；P1-6）：Some 时随发射计划下发
+    /// `model_reasoning_effort` 并写入会话亲和；None = 不下发（随 serve 缺省）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningEffort>,
     pub write_tasks: WriteTaskSupport,
     /// 量化损伤记录（#10 分列——换量化档可消除的缺陷）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -196,6 +201,7 @@ mod tests {
             served_name: "nvidia/Qwen3.6-35B-A3B-NVFP4".to_string(),
             thinking: ThinkingDefault::On,
             latency: LatencyClass::Medium,
+            reasoning: Some(ReasoningEffort::High),
             write_tasks: WriteTaskSupport::Reliable,
             quant_damage: Vec::new(),
             family_traits: vec!["深 bug 后果推演偶带臆测".to_string()],
@@ -243,7 +249,9 @@ schema_version = 1
 served_name = "deepseek-v4-flash"
 thinking = "unknown"
 latency = "slow"
+reasoning = "low"
 write_tasks = "reliable"
+escalation_note = "任务含糊或连续两次同思路失败时，停手以 ESCALATE: 上报。"
 notes = "三家最强：T1 限长版唯一双杀；DSpark 要求显式 temp=0"
 
 [models.deepseek-flash.provider]
@@ -268,6 +276,14 @@ temperature = 0.0
             Some(InjectParams {
                 temperature: Some(0.0)
             })
+        );
+        assert_eq!(entry.reasoning, Some(ReasoningEffort::Low));
+        assert!(
+            entry
+                .escalation_note
+                .as_deref()
+                .is_some_and(|n| n.contains("ESCALATE")),
+            "escalation 规范应从手写 TOML 解析出来"
         );
     }
 
